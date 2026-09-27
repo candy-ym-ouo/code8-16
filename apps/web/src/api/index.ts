@@ -6,8 +6,10 @@ import type {
   DogEar,
   MoodTag,
   Pagination,
+  ReadingSessionList,
   Reflection,
   RereadMark,
+  SessionOverride,
   TimelineEvent,
   Trace,
   User
@@ -83,6 +85,19 @@ export const reflectionApi = {
 export const timelineApi = {
   list: (params: URLSearchParams) =>
     api.get<{ items: TimelineEvent[]; pagination: Pagination }>(`/timeline?${params}`)
+};
+
+export const sessionApi = {
+  list: (params: URLSearchParams) => api.get<ReadingSessionList>(`/reading-sessions?${params}`),
+  merge: (
+    bookId: string,
+    body: { leftTraceId: string; rightTraceId: string; timezone: string; gapMinutes: number }
+  ) => api.post<{ override: SessionOverride }>(`/books/${bookId}/reading-sessions/merge`, body),
+  split: (
+    bookId: string,
+    body: { leftTraceId: string; rightTraceId: string; timezone: string; gapMinutes: number }
+  ) => api.post<{ override: SessionOverride }>(`/books/${bookId}/reading-sessions/split`, body),
+  revoke: (overrideId: string) => api.delete<void>(`/reading-session-overrides/${overrideId}`)
 };
 
 export const exportApi = {

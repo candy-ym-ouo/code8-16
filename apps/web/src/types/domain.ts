@@ -99,6 +99,50 @@ export interface Pagination {
   total: number;
 }
 
+export type SessionOverrideKind = 'MERGE' | 'SPLIT';
+
+export interface ReadingSessionTraceRef {
+  id: string;
+  type: TraceType;
+  createdAt: string;
+}
+
+export interface SessionAppliedOverride {
+  id: string;
+  kind: SessionOverrideKind;
+}
+
+export interface ReadingSession {
+  id: string;
+  bookId: string;
+  date: string;
+  localDates: string[];
+  spansMidnight: boolean;
+  startedAt: string;
+  endedAt: string;
+  traceCount: number;
+  traceIds: string[];
+  traces: ReadingSessionTraceRef[];
+  appliedOverrides: SessionAppliedOverride[];
+}
+
+export interface SessionOverride {
+  id: string;
+  bookId: string;
+  kind: SessionOverrideKind;
+  leftTraceId: string;
+  rightTraceId: string;
+  timezone: string;
+  gapMinutes: number;
+  createdAt: string;
+}
+
+export interface ReadingSessionList {
+  params: { timezone: string; gapMinutes: number };
+  items: ReadingSession[];
+  overrides: SessionOverride[];
+}
+
 export const MOOD_LABELS: Record<MoodTag, string> = {
   MOVED: '被触动',
   CALM: '平静',
@@ -131,7 +175,9 @@ export const ACTION_LABELS: Record<ActivityAction, string> = {
   DELETED: '删除',
   RESTORED: '恢复',
   STATUS_CHANGED: '状态变化',
-  COMPLETED: '读完'
+  COMPLETED: '读完',
+  MERGED: '合并会话',
+  SPLIT: '拆分会话'
 };
 
 export const ENTITY_LABELS: Record<ActivityEntityType, string> = {
@@ -139,5 +185,6 @@ export const ENTITY_LABELS: Record<ActivityEntityType, string> = {
   DOG_EAR: '折角',
   ANNOTATION: '批注',
   REREAD_MARK: '重读页',
-  COMPLETION_REFLECTION: '完成感受'
+  COMPLETION_REFLECTION: '完成感受',
+  READING_SESSION: '阅读会话'
 };

@@ -11,6 +11,7 @@ import { bookRoutes } from './modules/books/routes.js';
 import { traceRoutes } from './modules/traces/routes.js';
 import { reflectionRoutes } from './modules/reflections/routes.js';
 import { timelineRoutes } from './modules/timeline/routes.js';
+import { sessionRoutes } from './modules/sessions/routes.js';
 import { exportRoutes } from './modules/exports/routes.js';
 
 export async function buildApp(): Promise<FastifyInstance> {
@@ -74,6 +75,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(traceRoutes, { prefix: '/api/v1' });
   await app.register(reflectionRoutes, { prefix: '/api/v1' });
   await app.register(timelineRoutes, { prefix: '/api/v1' });
+  await app.register(sessionRoutes, { prefix: '/api/v1' });
   await app.register(exportRoutes, { prefix: '/api/v1' });
 
   app.setNotFoundHandler((request, reply) =>

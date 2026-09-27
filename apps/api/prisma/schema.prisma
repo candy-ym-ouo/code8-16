@@ -38,6 +38,7 @@ enum ActivityEntityType {
   ANNOTATION
   REREAD_MARK
   COMPLETION_REFLECTION
+  READING_SESSION
 }
 
 enum ActivityAction {
@@ -47,6 +48,13 @@ enum ActivityAction {
   RESTORED
   STATUS_CHANGED
   COMPLETED
+  MERGED
+  SPLIT
+}
+
+enum SessionOverrideKind {
+  MERGE
+  SPLIT
 }
 
 model User {
@@ -65,6 +73,7 @@ model User {
   rereadMarks       RereadMark[]
   reflections       CompletionReflection[]
   activityEvents    ActivityEvent[]
+  sessionOverrides  ReadingSessionOverride[]
 
   @@map("users")
 }
@@ -104,6 +113,7 @@ model Book {
   rereadMarks   RereadMark[]
   reflections   CompletionReflection[]
   activityEvents ActivityEvent[]
+  sessionOverrides ReadingSessionOverride[]
 
   @@index([userId, deletedAt, updatedAt])
   @@index([userId, status])
@@ -208,4 +218,32 @@ model ActivityEvent {
   @@index([userId, bookId, occurredAt])
   @@index([userId, entityType, occurredAt])
   @@map("activity_events")
+}
+
+/// 阅读会话是按「同书 + 本地日 + 最大间隔」从痕迹时间戳即时复算的派生视图。
+/// 本表只保存用户对自动分组的手工调整（跨午夜合并 / 强制拆分），
+/// 永远不修改痕迹的 createdAt 或 ActivityEvent，时间戳与审计证据保持原样。
+model ReadingSessionOverride {
+  id          String               @id @default(uuid()) @db.Uuid
+  userId      String               @map("user_id") @db.Uuid
+  bookId      String               @map("book_id") @db.Uuid
+  kind        SessionOverrideKind
+  /// SPLIT：在 leftTraceId 与 rightTraceId 之间切开；MERGE：把两条相邻痕迹所在片段连起来。
+  leftTraceId  String              @map("left_trace_id") @db.Uuid
+  rightTraceId String              @map("right_trace_id") @db.Uuid
+  leftTraceType  ActivityEntityType @map("left_trace_type")
+  rightTraceType ActivityEntityType @map("right_trace_type")
+  /// 应用该调整时使用的复算参数，保证跨午夜与时区调整后仍可解释、可复算。
+  timezone    String
+  gapMinutes  Int                  @map("gap_minutes")
+  createdAt   DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  revokedAt   DateTime?            @map("revoked_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  book Book @relation(fields: [bookId], references: [id], onDelete: Restrict)
+
+  @@index([userId, bookId, revokedAt])
+  @@index([leftTraceId])
+  @@index([rightTraceId])
+  @@map("reading_session_overrides")
 }

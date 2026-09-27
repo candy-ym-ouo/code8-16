@@ -6,6 +6,7 @@ import { booksApi, reflectionApi, traceApi } from '../api';
 import { formatDate, formatDateTime } from '../api/format';
 import ErrorNotice from '../components/ErrorNotice.vue';
 import MoodPicker from '../components/MoodPicker.vue';
+import ReadingSessionsCard from '../components/ReadingSessionsCard.vue';
 import {
   ACTION_LABELS,
   ENTITY_LABELS,
@@ -36,7 +37,7 @@ const loading = ref(true);
 const saving = ref(false);
 const error = ref('');
 const success = ref('');
-const activeTab = ref<'PAGES' | TraceType | 'REFLECTIONS' | 'TIMELINE'>('PAGES');
+const activeTab = ref<'PAGES' | 'SESSIONS' | TraceType | 'REFLECTIONS' | 'TIMELINE'>('PAGES');
 const createType = ref<TraceType | null>(null);
 const editing = ref<Trace | null>(null);
 const showCompleteForm = ref(false);
@@ -56,6 +57,7 @@ const completeForm = reactive({
 
 const tabs = computed(() => [
   { value: 'PAGES' as const, label: '按页' },
+  { value: 'SESSIONS' as const, label: '阅读会话' },
   { value: 'DOG_EAR' as const, label: `折角 ${book.value?.traceSummary.dogEars ?? 0}` },
   { value: 'ANNOTATION' as const, label: `批注 ${book.value?.traceSummary.annotations ?? 0}` },
   { value: 'REREAD_MARK' as const, label: `重读 ${book.value?.traceSummary.rereadMarks ?? 0}` },
@@ -550,6 +552,8 @@ onMounted(load);
         <p v-if="visibleTraces.length === 0" class="empty-inline">这个分类还没有留下痕迹。</p>
       </div>
     </section>
+
+    <ReadingSessionsCard v-if="activeTab === 'SESSIONS'" :book-id="bookView.id" :traces="traces" />
   </section>
   <section v-else class="empty-state card">
     <h1>书目不可用</h1>

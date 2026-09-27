@@ -1,10 +1,14 @@
 export type BookStatus = 'TO_READ' | 'READING' | 'READ' | 'PAUSED' | 'ABANDONED';
 export type MoodTag = 'MOVED' | 'CALM' | 'JOYFUL' | 'SAD' | 'ANGRY' | 'CONFUSED' | 'RELIEVED' | 'EMPTY' | 'CHANGED';
 export type TraceType = 'DOG_EAR' | 'ANNOTATION' | 'REREAD_MARK';
-export type ActivityAction = 'CREATED' | 'UPDATED' | 'DELETED' | 'RESTORED' | 'STATUS_CHANGED' | 'COMPLETED';
-export type ActivityEntityType = 'BOOK' | 'DOG_EAR' | 'ANNOTATION' | 'REREAD_MARK' | 'COMPLETION_REFLECTION';
+export type ActivityAction = 'CREATED' | 'UPDATED' | 'DELETED' | 'RESTORED' | 'STATUS_CHANGED' | 'COMPLETED' | 'MERGED' | 'SPLIT';
+export type ActivityEntityType = 'BOOK' | 'DOG_EAR' | 'ANNOTATION' | 'REREAD_MARK' | 'COMPLETION_REFLECTION' | 'READING_SESSION';
+export type SessionOverrideKind = 'MERGE' | 'SPLIT';
 export declare const BOOK_STATUSES: BookStatus[];
 export declare const MOOD_TAGS: MoodTag[];
 export declare const TRACE_TYPES: TraceType[];
 export declare const ACTIVITY_ACTIONS: ActivityAction[];
 export declare const ACTIVITY_ENTITY_TYPES: ActivityEntityType[];
+export declare const SESSION_OVERRIDE_KINDS: SessionOverrideKind[];
+export declare const SESSION_DEFAULT_TIMEZONE: string;
+export declare const SESSION_DEFAULT_GAP_MINUTES: number;
