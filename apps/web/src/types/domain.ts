@@ -1,6 +1,6 @@
-import type { ActivityAction, ActivityEntityType, BookStatus, MoodTag, TraceType } from '@paper-book-traces/shared';
+import type { ActivityAction, ActivityEntityType, BookStatus, MoodTag, SessionOverrideKind, TraceType } from '@paper-book-traces/shared';
 
-export type { ActivityAction, ActivityEntityType, BookStatus, MoodTag, TraceType };
+export type { ActivityAction, ActivityEntityType, BookStatus, MoodTag, SessionOverrideKind, TraceType };
 
 export interface User {
   id: string;
@@ -68,6 +68,47 @@ export interface RereadMark {
 }
 
 export type Trace = DogEar | Annotation | RereadMark;
+
+export interface SessionEdgeOverride {
+  overrideId: string;
+  kind: SessionOverrideKind;
+  previousTraceId: string;
+  nextTraceId: string;
+}
+
+/** 阅读片段是由痕迹时间戳与分组参数实时派生的视图，不单独持久化 */
+export interface ReadingSession {
+  key: string;
+  bookId: string;
+  localDate: string;
+  startedAt: string;
+  endedAt: string;
+  traceCount: number;
+  traceIds: string[];
+  traceTypes: Record<TraceType, number>;
+  crossedLocalMidnight: boolean;
+  edgeOverrides: SessionEdgeOverride[];
+}
+
+export interface ReadingSessionOverride {
+  id: string;
+  bookId: string;
+  kind: SessionOverrideKind;
+  previousTraceId: string;
+  nextTraceId: string;
+  createdAt: string;
+  revokedAt: string | null;
+}
+
+export interface ReadingSessionsResponse {
+  items: ReadingSession[];
+  overrides: ReadingSessionOverride[];
+  staleOverrideIds: string[];
+  /** 当前参数下真正改变形状的覆盖：MERGE 救回本会断开的边，SPLIT 切开本会相连的边 */
+  decisiveMergeEdges: SessionEdgeOverride[];
+  decisiveSplitEdges: SessionEdgeOverride[];
+  grouping: { timeZone: string; gapMinutes: number };
+}
 
 export interface Reflection {
   id: string;
@@ -139,5 +180,6 @@ export const ENTITY_LABELS: Record<ActivityEntityType, string> = {
   DOG_EAR: '折角',
   ANNOTATION: '批注',
   REREAD_MARK: '重读页',
-  COMPLETION_REFLECTION: '完成感受'
+  COMPLETION_REFLECTION: '完成感受',
+  READING_SESSION: '阅读片段'
 };

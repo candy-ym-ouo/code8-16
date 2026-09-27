@@ -38,6 +38,7 @@ enum ActivityEntityType {
   ANNOTATION
   REREAD_MARK
   COMPLETION_REFLECTION
+  READING_SESSION
 }
 
 enum ActivityAction {
@@ -47,6 +48,11 @@ enum ActivityAction {
   RESTORED
   STATUS_CHANGED
   COMPLETED
+}
+
+enum SessionOverrideKind {
+  MERGE
+  SPLIT
 }
 
 model User {
@@ -65,6 +71,7 @@ model User {
   rereadMarks       RereadMark[]
   reflections       CompletionReflection[]
   activityEvents    ActivityEvent[]
+  sessionOverrides  ReadingSessionOverride[]
 
   @@map("users")
 }
@@ -104,6 +111,7 @@ model Book {
   rereadMarks   RereadMark[]
   reflections   CompletionReflection[]
   activityEvents ActivityEvent[]
+  sessionOverrides ReadingSessionOverride[]
 
   @@index([userId, deletedAt, updatedAt])
   @@index([userId, status])
@@ -208,4 +216,25 @@ model ActivityEvent {
   @@index([userId, bookId, occurredAt])
   @@index([userId, entityType, occurredAt])
   @@map("activity_events")
+}
+
+/// 阅读片段的人工合并/拆分决定。作用于“相邻活痕迹之间的一条边”。
+/// 片段本身是按 (书, 本地日, 间隔) 随时复算的派生视图；
+/// 本表只保存覆盖意图与审计字段，绝不写入或修改任何痕迹时间戳。
+model ReadingSessionOverride {
+  id              String              @id @default(uuid()) @db.Uuid
+  userId          String              @map("user_id") @db.Uuid
+  bookId          String              @map("book_id") @db.Uuid
+  kind            SessionOverrideKind
+  previousTraceId String              @map("previous_trace_id") @db.Uuid
+  nextTraceId     String              @map("next_trace_id") @db.Uuid
+  createdAt       DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  revokedAt       DateTime?           @map("revoked_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  book Book @relation(fields: [bookId], references: [id], onDelete: Restrict)
+
+  @@index([userId, bookId, createdAt])
+  @@index([bookId, previousTraceId, nextTraceId])
+  @@map("reading_session_overrides")
 }

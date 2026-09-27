@@ -2,8 +2,8 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ApiError } from '../api/client';
-import { booksApi, reflectionApi, traceApi } from '../api';
-import { formatDate, formatDateTime } from '../api/format';
+import { booksApi, readingSessionApi, reflectionApi, traceApi } from '../api';
+import { formatDate, formatDateTime, formatTime } from '../api/format';
 import ErrorNotice from '../components/ErrorNotice.vue';
 import MoodPicker from '../components/MoodPicker.vue';
 import {
@@ -15,11 +15,24 @@ import {
   type Book,
   type BookStatus,
   type MoodTag,
+  type ReadingSession,
+  type ReadingSessionsResponse,
   type Reflection,
   type Trace,
   type TraceType
 } from '../types/domain';
 import { timelineApi } from '../api';
+
+const SESSION_TZ_STORAGE_KEY = 'pbt.sessionTimeZone';
+const SESSION_GAP_STORAGE_KEY = 'pbt.sessionGapMinutes';
+
+function detectTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai';
+  } catch {
+    return 'Asia/Shanghai';
+  }
+}
 
 type DeletedItem = { kind: 'DOG_EAR' | 'ANNOTATION' | 'REREAD_MARK' | 'REFLECTION'; id: string; label: string };
 type ReflectionEdit = { id: string; version: number; moodTags: MoodTag[]; text: string };
@@ -36,7 +49,14 @@ const loading = ref(true);
 const saving = ref(false);
 const error = ref('');
 const success = ref('');
-const activeTab = ref<'PAGES' | TraceType | 'REFLECTIONS' | 'TIMELINE'>('PAGES');
+const activeTab = ref<'PAGES' | TraceType | 'REFLECTIONS' | 'TIMELINE' | 'SESSIONS'>('PAGES');
+const sessionsData = ref<ReadingSessionsResponse | null>(null);
+const sessionsLoading = ref(false);
+const sessionTimeZone = ref(localStorage.getItem(SESSION_TZ_STORAGE_KEY) || detectTimeZone());
+const sessionGapMinutes = ref(
+  Number(localStorage.getItem(SESSION_GAP_STORAGE_KEY) || 90)
+);
+const sessionSaving = ref(false);
 const createType = ref<TraceType | null>(null);
 const editing = ref<Trace | null>(null);
 const showCompleteForm = ref(false);
@@ -59,6 +79,7 @@ const tabs = computed(() => [
   { value: 'DOG_EAR' as const, label: `折角 ${book.value?.traceSummary.dogEars ?? 0}` },
   { value: 'ANNOTATION' as const, label: `批注 ${book.value?.traceSummary.annotations ?? 0}` },
   { value: 'REREAD_MARK' as const, label: `重读 ${book.value?.traceSummary.rereadMarks ?? 0}` },
+  { value: 'SESSIONS' as const, label: '阅读片段' },
   { value: 'REFLECTIONS' as const, label: `读完感受 ${reflections.value.length}` },
   { value: 'TIMELINE' as const, label: '本书时间线' }
 ]);
@@ -98,6 +119,152 @@ function traceBody(trace: Trace): string {
   return trace.type === 'ANNOTATION' ? trace.content : trace.reason || '未填写原因';
 }
 
+function traceSnippet(trace: Trace): string {
+  return traceBody(trace).slice(0, 80);
+}
+
+// ---------- 阅读片段（派生视图：参数改变即整段重算，不触碰痕迹时间戳） ----------
+
+const traceById = computed(() => new Map(traces.value.map((trace) => [trace.id, trace])));
+const sessions = computed<ReadingSession[]>(() => sessionsData.value?.items ?? []);
+const staleOverrides = computed(() => {
+  const staleIds = new Set(sessionsData.value?.staleOverrideIds ?? []);
+  return (sessionsData.value?.overrides ?? []).filter((override) => staleIds.has(override.id));
+});
+
+function edgeKey(a: string, b: string): string {
+  return [a, b].sort().join('|');
+}
+
+function sessionTraceSummary(session: ReadingSession): string {
+  const parts: string[] = [];
+  (Object.entries(session.traceTypes) as Array<[TraceType, number]>).forEach(([type, count]) => {
+    if (count > 0) parts.push(`${TRACE_LABELS[type]} ${count}`);
+  });
+  return parts.join(' · ');
+}
+
+function sessionEdgeAt(session: ReadingSession, traceIndex: number) {
+  const a = session.traceIds[traceIndex]!;
+  const b = session.traceIds[traceIndex + 1]!;
+  return { a, b };
+}
+
+function sessionBoundary(index: number) {
+  const current = sessions.value[index]!;
+  const older = sessions.value[index + 1]!;
+  return {
+    a: current.traceIds[current.traceIds.length - 1]!,
+    b: older.traceIds[0]!
+  };
+}
+
+interface SessionView {
+  session: ReadingSession;
+  innerEdges: Array<{ a: string; b: string; decisiveMerge: boolean }>;
+  boundary: { a: string; b: string; decisiveSplitId: string | null } | null;
+}
+
+const sessionsView = computed<SessionView[]>(() => {
+  const mergeSet = new Set(
+    (sessionsData.value?.decisiveMergeEdges ?? []).map((edge) => edgeKey(edge.previousTraceId, edge.nextTraceId))
+  );
+  const splitMap = new Map(
+    (sessionsData.value?.decisiveSplitEdges ?? []).map((edge) => [
+      edgeKey(edge.previousTraceId, edge.nextTraceId),
+      edge.overrideId
+    ])
+  );
+  return sessions.value.map((session, index) => {
+    const innerEdges = session.traceIds.slice(0, -1).map((_, edgeIndex) => {
+      const { a, b } = sessionEdgeAt(session, edgeIndex);
+      return { a, b, decisiveMerge: mergeSet.has(edgeKey(a, b)) };
+    });
+    let boundary: SessionView['boundary'] = null;
+    if (index < sessions.value.length - 1) {
+      const { a, b } = sessionBoundary(index);
+      const decisiveSplitId = splitMap.get(edgeKey(a, b)) ?? null;
+      boundary = { a, b, decisiveSplitId };
+    }
+    return { session, innerEdges, boundary };
+  });
+});
+
+async function loadSessions(): Promise<void> {
+  if (!book.value) return;
+  sessionsLoading.value = true;
+  try {
+    const params = new URLSearchParams({
+      timeZone: sessionTimeZone.value,
+      gapMinutes: String(sessionGapMinutes.value)
+    });
+    sessionsData.value = await booksApi.readingSessions(book.value.id, params);
+    localStorage.setItem(SESSION_TZ_STORAGE_KEY, sessionTimeZone.value);
+    localStorage.setItem(SESSION_GAP_STORAGE_KEY, String(sessionGapMinutes.value));
+  } catch (caught) {
+    error.value = caught instanceof ApiError ? caught.message : '阅读片段加载失败';
+  } finally {
+    sessionsLoading.value = false;
+  }
+}
+
+function recomputeSessions(): void {
+  const draftGap = Number(sessionGapMinutes.value);
+  if (!Number.isInteger(draftGap) || draftGap < 1 || draftGap > 1440) {
+    error.value = '连续片段最大间隔必须是 1 至 1440 分钟之间的整数';
+    return;
+  }
+  if (!sessionTimeZone.value.trim()) {
+    error.value = '请填写 IANA 时区，例如 Asia/Shanghai';
+    return;
+  }
+  error.value = '';
+  void loadSessions();
+}
+
+async function applySessionOverride(
+  kind: 'MERGE' | 'SPLIT',
+  traceIdA: string,
+  traceIdB: string
+): Promise<void> {
+  if (!book.value) return;
+  const label = kind === 'MERGE' ? '合并这两个片段' : '在此处拆成两个片段';
+  if (!window.confirm(`${label}？\n该操作只记录分组决定，不会移动任何痕迹的时间。`)) return;
+  sessionSaving.value = true;
+  error.value = '';
+  try {
+    await readingSessionApi.addOverride(book.value.id, { kind, traceIdA, traceIdB });
+    success.value = kind === 'MERGE' ? '片段已按你的决定合并' : '片段已按你的决定拆开';
+    await loadSessions();
+  } catch (caught) {
+    error.value = caught instanceof ApiError ? caught.message : '片段调整失败';
+  } finally {
+    sessionSaving.value = false;
+  }
+}
+
+async function revokeSessionOverride(overrideId: string): Promise<void> {
+  if (!window.confirm('撤销这次人工调整？片段将按时间、时区和间隔重新自然分组，时间戳不会被修改。')) return;
+  sessionSaving.value = true;
+  error.value = '';
+  try {
+    await readingSessionApi.revokeOverride(overrideId);
+    success.value = '人工调整已撤销，片段已重新计算';
+    await loadSessions();
+  } catch (caught) {
+    error.value = caught instanceof ApiError ? caught.message : '撤销失败';
+  } finally {
+    sessionSaving.value = false;
+  }
+}
+
+async function selectTab(tab: typeof activeTab.value): Promise<void> {
+  activeTab.value = tab;
+  if (tab === 'SESSIONS' && !sessionsData.value) {
+    await loadSessions();
+  }
+}
+
 function canEditReflection(reflection: Reflection): boolean {
   return new Date(reflection.editableUntil).getTime() >= Date.now();
 }
@@ -130,6 +297,8 @@ async function load(): Promise<void> {
     traces.value = loadedTraces;
     reflections.value = reflectionResult.items;
     activities.value = timelineResult.items;
+    // 痕迹集合可能已变化，片段下次打开时按当前参数重算（旧人工覆盖若不再相邻会被标记失效）
+    sessionsData.value = null;
   } catch (caught) {
     error.value = caught instanceof ApiError ? caught.message : '书目加载失败';
   } finally {
@@ -485,7 +654,7 @@ onMounted(load);
           type="button"
           role="tab"
           :aria-selected="activeTab === tab.value"
-          @click="activeTab = tab.value"
+          @click="selectTab(tab.value)"
         >
           {{ tab.label }}
         </button>
@@ -530,6 +699,129 @@ onMounted(load);
           </div>
         </article>
         <p v-if="activities.length === 0" class="empty-inline">这本书还没有变化记录。</p>
+      </div>
+
+      <div v-else-if="activeTab === 'SESSIONS'" class="sessions-panel">
+        <div class="session-controls">
+          <label>
+            按哪个时区划分本地日
+            <input v-model="sessionTimeZone" type="text" spellcheck="false" placeholder="Asia/Shanghai" />
+          </label>
+          <label>
+            最大连续间隔（分钟）
+            <input v-model.number="sessionGapMinutes" type="number" min="1" max="1440" />
+          </label>
+          <button class="button" type="button" :disabled="sessionsLoading || sessionSaving" @click="recomputeSessions">
+            按新参数重算
+          </button>
+        </div>
+        <p class="muted session-note">
+          片段只按痕迹原始时间戳派生：同书、在 {{ sessionTimeZone }} 的同一本地日历日内，
+          相邻痕迹间隔不超过 {{ sessionGapMinutes }} 分钟即连续。跨午夜会自动分到两日，
+          切换时区或间隔后可随时重算；人工合并/拆分只保存分组决定，绝不移动痕迹时间。
+        </p>
+
+        <p v-if="sessionsLoading" class="muted">正在重算阅读片段…</p>
+
+        <template v-else>
+          <div v-if="staleOverrides.length > 0" class="stale-notice">
+            <strong>有 {{ staleOverrides.length }} 个人工调整已失效</strong>
+            <p class="muted">
+              调整所指的两条痕迹已被删除或中间插入了新痕迹，不参与本次重算。可删除这些审计记录，
+              历史时间线仍保留它们的创建与撤销证据。
+            </p>
+            <button
+              v-for="override in staleOverrides"
+              :key="override.id"
+              class="text-button danger-text"
+              type="button"
+              :disabled="sessionSaving"
+              @click="revokeSessionOverride(override.id)"
+            >
+              删除失效的{{ override.kind === 'MERGE' ? '合并' : '拆分' }}记录（{{ formatDateTime(override.createdAt) }}）
+            </button>
+          </div>
+
+          <div v-if="sessions.length === 0" class="empty-inline">
+            这本书还没有阅读痕迹，先去“按页”或分类页签下记一条折角或批注。
+          </div>
+
+          <div v-else class="session-list">
+            <template v-for="view in sessionsView" :key="view.session.key">
+              <article class="session-card">
+                <header class="session-card-heading">
+                  <div>
+                    <strong>{{ view.session.localDate }}</strong>
+                    <span class="muted">
+                      {{ formatTime(view.session.startedAt) }} – {{ formatTime(view.session.endedAt) }}
+                      · {{ sessionTraceSummary(view.session) }}
+                    </span>
+                  </div>
+                  <span v-if="view.session.crossedLocalMidnight" class="session-midnight-tag">跨午夜</span>
+                </header>
+
+                <ul class="session-items">
+                  <li v-for="traceId in view.session.traceIds" :key="traceId" class="session-item">
+                    <div class="session-item-main">
+                      <template v-if="traceById.get(traceId)">
+                        <span class="trace-type">{{ TRACE_LABELS[traceById.get(traceId)!.type] }}</span>
+                        <strong>{{ traceRange(traceById.get(traceId)!) }}</strong>
+                        <span class="muted">
+                          {{ formatTime(traceById.get(traceId)!.createdAt) }} · {{ traceSnippet(traceById.get(traceId)!) }}
+                        </span>
+                      </template>
+                      <template v-else>
+                        <span class="trace-type">已删除痕迹</span>
+                        <span class="muted">该痕迹已被删除，仅保留痕迹 ID {{ traceId }} 作为分组证据</span>
+                      </template>
+                    </div>
+                  </li>
+                </ul>
+
+                <div v-if="view.innerEdges.length > 0" class="session-edges">
+                  <div
+                    v-for="edge in view.innerEdges"
+                    :key="edge.a + edge.b"
+                    class="session-edge"
+                    :class="{ 'edge-forced-merge': edge.decisiveMerge }"
+                  >
+                    <span class="muted">↑ 两条相邻痕迹</span>
+                    <button
+                      class="text-button"
+                      type="button"
+                      :disabled="sessionSaving"
+                      @click="applySessionOverride('SPLIT', edge.a, edge.b)"
+                    >
+                      {{ edge.decisiveMerge ? '撤销人工合并并在此拆开' : '在此拆成两个片段' }}
+                    </button>
+                  </div>
+                </div>
+              </article>
+
+              <div v-if="view.boundary" :key="`boundary-${view.session.key}`" class="session-boundary">
+                <span class="muted">—— 片段边界 ——</span>
+                <button
+                  v-if="view.boundary.decisiveSplitId"
+                  class="text-button"
+                  type="button"
+                  :disabled="sessionSaving"
+                  @click="revokeSessionOverride(view.boundary!.decisiveSplitId!)"
+                >
+                  撤销人工拆分，恢复自然连续
+                </button>
+                <button
+                  v-else
+                  class="text-button"
+                  type="button"
+                  :disabled="sessionSaving"
+                  @click="applySessionOverride('MERGE', view.boundary!.a, view.boundary!.b)"
+                >
+                  人工合并这两个片段
+                </button>
+              </div>
+            </template>
+          </div>
+        </template>
       </div>
 
       <div v-else class="trace-list">

@@ -18,6 +18,14 @@ export function formatDate(value: string | Date | null | undefined): string {
   }).format(new Date(value));
 }
 
+export function formatTime(value: string | Date | null | undefined): string {
+  if (!value) return '';
+  return new Intl.DateTimeFormat('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(new Date(value));
+}
+
 export function shortText(value: string, length = 100): string {
   const normalized = value.replace(/\s+/g, ' ').trim();
   return normalized.length > length ? `${normalized.slice(0, length)}…` : normalized;

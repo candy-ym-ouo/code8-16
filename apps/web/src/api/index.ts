@@ -6,8 +6,11 @@ import type {
   DogEar,
   MoodTag,
   Pagination,
+  ReadingSessionOverride,
+  ReadingSessionsResponse,
   Reflection,
   RereadMark,
+  SessionOverrideKind,
   TimelineEvent,
   Trace,
   User
@@ -47,7 +50,9 @@ export const booksApi = {
   delete: (id: string, version: number) => api.delete<void>(`/books/${id}`, { version }),
   traces: (id: string, params: URLSearchParams) =>
     api.get<{ items: Trace[]; pagination: Pagination }>(`/books/${id}/traces?${params}`),
-  reflections: (id: string) => api.get<{ items: Reflection[] }>(`/books/${id}/reflections`)
+  reflections: (id: string) => api.get<{ items: Reflection[] }>(`/books/${id}/reflections`),
+  readingSessions: (id: string, params: URLSearchParams) =>
+    api.get<ReadingSessionsResponse>(`/books/${id}/reading-sessions?${params}`)
 };
 
 export const traceApi = {
@@ -83,6 +88,18 @@ export const reflectionApi = {
 export const timelineApi = {
   list: (params: URLSearchParams) =>
     api.get<{ items: TimelineEvent[]; pagination: Pagination }>(`/timeline?${params}`)
+};
+
+export const readingSessionApi = {
+  addOverride: (
+    bookId: string,
+    body: { kind: SessionOverrideKind; traceIdA: string; traceIdB: string }
+  ) => api.post<{ override: ReadingSessionOverride }>(
+    `/books/${bookId}/reading-session-overrides`,
+    body
+  ),
+  revokeOverride: (overrideId: string) =>
+    api.delete<void>(`/reading-session-overrides/${overrideId}`)
 };
 
 export const exportApi = {
